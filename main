@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         X/Twitter 敏感内容自动展示（精准版）
+// @name         X/Twitter 敏感内容自动展示（排除Grok版）
 // @namespace    http://tampermonkey.net/
-// @version      1.4
-// @description  精准自动展开X/Twitter上的敏感内容警告，不影响正常功能
+// @version      1.5
+// @description  自动展开敏感内容，但排除Grok翻译按钮
 // @author       SHOUDOUJUN
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -14,30 +14,29 @@
 
 (function() {
     'use strict';
-    
+
     const config = {
         checkInterval: 1000,
         maxRetries: 5,
         clickDelay: 200
     };
-    
-    class PreciseSensitiveContentExpander {
+
+    class GrokAwareSensitiveContentExpander {
         constructor() {
             this.processedElements = new WeakSet();
             this.retryCount = 0;
             this.init();
         }
-        
+
         init() {
-            console.log('X敏感内容自动展示脚本（精准版）已启动');
+            console.log('X敏感内容自动展示脚本（排除Grok版）已启动');
             this.addPreciseStyles();
             this.startPreciseObserver();
             this.startPeriodicCheck();
-            
-            // 初始检查
+
             setTimeout(() => this.expandSensitiveContent(), 2000);
         }
-        
+
         addPreciseStyles() {
             const style = document.createElement('style');
             style.textContent = `
@@ -47,7 +46,7 @@
                 div[data-testid="tweet"] video[style*="blur"] {
                     filter: none !important;
                 }
-                
+
                 /* 隐藏敏感内容警告遮罩 */
                 div[role="button"]:has(> span:contains("敏感内容")),
                 div[role="button"]:has(> span:contains("Sensitive")),
@@ -57,11 +56,11 @@
             `;
             document.head.appendChild(style);
         }
-        
+
         startPreciseObserver() {
             const observer = new MutationObserver((mutations) => {
                 let shouldCheck = false;
-                
+
                 mutations.forEach((mutation) => {
                     mutation.addedNodes.forEach((node) => {
                         if (node.nodeType === 1) {
@@ -71,26 +70,26 @@
                         }
                     });
                 });
-                
+
                 if (shouldCheck) {
                     setTimeout(() => this.expandSensitiveContent(), 500);
                 }
             });
-            
+
             observer.observe(document.body, {
                 childList: true,
                 subtree: true
             });
         }
-        
+
         containsSensitiveContent(node) {
             const text = node.textContent || '';
-            return text.includes('敏感内容') || 
+            return text.includes('敏感内容') ||
                    text.includes('Sensitive content') ||
-                   text.includes('显示') ||
-                   text.includes('Show');
+                   (text.includes('显示') && !text.includes('Show original')) ||
+                   (text.includes('Show') && !text.includes('Show original'));
         }
-        
+
         startPeriodicCheck() {
             const interval = setInterval(() => {
                 if (this.retryCount < config.maxRetries) {
@@ -101,50 +100,49 @@
                 }
             }, config.checkInterval);
         }
-        
+
         expandSensitiveContent() {
-            console.log('正在查找敏感内容...');
-            
             // 方法1: 查找包含敏感内容文本的按钮
             this.clickSensitiveButtons();
-            
+
             // 方法2: 查找特定的警告模式
             this.clickWarningPatterns();
-            
+
             // 方法3: 处理媒体内容
             this.handleMediaContent();
-            
+
             // 方法4: 处理独立警告页面
             this.handleWarningPages();
         }
-        
+
         clickSensitiveButtons() {
-            // 精确查找敏感内容按钮
             const buttons = document.querySelectorAll('button, [role="button"]');
-            
+
             buttons.forEach(button => {
                 if (this.processedElements.has(button)) return;
-                
+
                 const buttonText = button.textContent || '';
                 const ariaLabel = button.getAttribute('aria-label') || '';
                 const parentText = button.parentElement?.textContent || '';
-                
+                const grandParentText = button.parentElement?.parentElement?.textContent || '';
+
                 // 精确匹配敏感内容按钮
                 const isSensitiveButton = (
-                    // 按钮文本匹配
+                    // 按钮文本匹配 - 排除Grok翻译
                     (buttonText.includes('显示') && !buttonText.includes('显示更多') && !buttonText.includes('显示回复')) ||
-                    (buttonText.includes('Show') && !buttonText.includes('Show more') && !buttonText.includes('Show replies')) ||
+                    (buttonText.includes('Show') && !buttonText.includes('Show more') && !buttonText.includes('Show replies') && !buttonText.includes('Show original')) ||
                     (buttonText.includes('查看') && buttonText.length < 10) ||
                     (buttonText.includes('View') && buttonText.length < 10) ||
-                    
+
                     // Aria标签匹配
                     (ariaLabel.includes('显示推文')) ||
                     (ariaLabel.includes('Show tweet')) ||
-                    
+
                     // 上下文匹配 - 父元素包含敏感内容提示
-                    (parentText.includes('敏感内容') && buttonText.match(/^(显示|查看|Show|View)$/))
+                    ((parentText.includes('敏感内容') || grandParentText.includes('敏感内容')) &&
+                     buttonText.match(/^(显示|查看|Show|View)$/))
                 );
-                
+
                 // 排除功能按钮
                 const isFunctionalButton = (
                     buttonText.includes('喜欢') || buttonText.includes('Like') ||
@@ -157,32 +155,89 @@
                     button.closest('[data-testid="retweet"]') ||
                     button.closest('[data-testid="share"]')
                 );
-                
-                if (isSensitiveButton && !isFunctionalButton && this.isVisible(button)) {
+
+                // 排除Grok翻译按钮
+                const isGrokButton = this.isGrokTranslationButton(button);
+
+                if (isSensitiveButton && !isFunctionalButton && !isGrokButton && this.isVisible(button)) {
                     console.log('找到敏感内容按钮:', buttonText);
                     this.safeClick(button);
                     this.processedElements.add(button);
                 }
             });
         }
-        
+
+        // 专门识别Grok翻译按钮
+        isGrokTranslationButton(button) {
+            const buttonText = button.textContent || '';
+
+            // 检查按钮文本
+            if (buttonText.includes('Show original') || buttonText.includes('显示原文')) {
+                return true;
+            }
+
+            // 检查上下文是否包含翻译相关文本
+            const container = button.closest('div[data-testid="tweet"]') || button.closest('article');
+            if (container) {
+                const containerText = container.textContent || '';
+
+                // Grok翻译特有的标识
+                const grokIndicators = [
+                    'Translated by Grok',
+                    '由Grok翻译',
+                    'Translated from',
+                    '翻译自',
+                    'Original text',
+                    '原文'
+                ];
+
+                for (let indicator of grokIndicators) {
+                    if (containerText.includes(indicator)) {
+                        // 如果容器中有翻译标识，且按钮是"Show"相关，则很可能是Grok按钮
+                        if (buttonText.includes('Show') || buttonText.includes('显示')) {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // 检查按钮的特定位置和样式特征
+            const buttonStyles = window.getComputedStyle(button);
+            const parent = button.parentElement;
+
+            // Grok翻译按钮通常在翻译文本下方，有特定的样式
+            if (parent) {
+                const parentStyles = window.getComputedStyle(parent);
+                if (parentStyles.marginTop === '8px' || parentStyles.marginTop === '12px') {
+                    // 检查按钮上方是否有翻译文本
+                    const previousSibling = button.previousElementSibling;
+                    if (previousSibling) {
+                        const siblingText = previousSibling.textContent || '';
+                        if (siblingText.includes('Translated by') || siblingText.includes('翻译自')) {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
         clickWarningPatterns() {
-            // 查找特定的警告模式
             const warningPatterns = [
-                // 包含"敏感内容"文本的容器中的按钮
                 'div:has(> span:contains("敏感内容")) button',
                 'div:has(> span:contains("Sensitive")) button',
-                
-                // 特定的警告样式
                 '[data-testid="warning"] button',
                 '[role="alert"] button'
             ];
-            
+
             warningPatterns.forEach(pattern => {
                 try {
                     const elements = document.querySelectorAll(pattern);
                     elements.forEach(element => {
-                        if (!this.processedElements.has(element) && this.isVisible(element)) {
+                        if (!this.processedElements.has(element) &&
+                            !this.isGrokTranslationButton(element) &&
+                            this.isVisible(element)) {
                             const text = element.textContent || '';
                             if (text.match(/^(显示|查看|Show|View)$/)) {
                                 console.log('通过模式找到敏感内容按钮:', pattern);
@@ -196,20 +251,18 @@
                 }
             });
         }
-        
+
         handleMediaContent() {
-            // 处理模糊的媒体内容
             const mediaElements = document.querySelectorAll(`
                 [data-testid="tweetPhoto"],
                 [data-testid="tweetVideo"],
                 img,
                 video
             `);
-            
+
             mediaElements.forEach(media => {
                 const style = window.getComputedStyle(media);
                 if (style.filter.includes('blur') || style.webkitFilter.includes('blur')) {
-                    // 检查是否在敏感内容上下文中
                     const container = media.closest('div[data-testid="tweet"]');
                     if (container) {
                         const containerText = container.textContent || '';
@@ -221,23 +274,23 @@
                 }
             });
         }
-        
+
         handleWarningPages() {
-            // 处理独立警告页面
             const warningPages = document.querySelectorAll(`
                 [data-testid="empty_state"],
                 main h2:has-text("敏感内容"),
                 main span:has-text("敏感内容")
             `);
-            
+
             warningPages.forEach(page => {
                 const pageText = page.textContent || '';
                 if (pageText.includes('敏感内容') || pageText.includes('Sensitive')) {
                     const buttons = page.querySelectorAll('button, [role="button"]');
                     buttons.forEach(button => {
                         const buttonText = button.textContent || '';
-                        if (buttonText.match(/^(显示|查看|Show|View)$/) && 
-                            !this.processedElements.has(button) && 
+                        if (buttonText.match(/^(显示|查看|Show|View)$/) &&
+                            !this.processedElements.has(button) &&
+                            !this.isGrokTranslationButton(button) &&
                             this.isVisible(button)) {
                             console.log('处理警告页面按钮');
                             this.safeClick(button);
@@ -247,30 +300,29 @@
                 }
             });
         }
-        
+
         safeClick(element) {
             setTimeout(() => {
                 try {
                     element.scrollIntoViewIfNeeded?.();
                     element.click();
                     console.log('成功点击敏感内容按钮');
-                    
-                    // 点击后再次检查，确保内容展开
+
                     setTimeout(() => this.expandSensitiveContent(), 1000);
                 } catch (error) {
                     console.warn('点击失败:', error);
                 }
             }, config.clickDelay);
         }
-        
+
         isVisible(element) {
             if (!element) return false;
             const rect = element.getBoundingClientRect();
             const style = window.getComputedStyle(element);
-            
-            return style.display !== 'none' && 
-                   style.visibility !== 'hidden' && 
-                   rect.width > 0 && 
+
+            return style.display !== 'none' &&
+                   style.visibility !== 'hidden' &&
+                   rect.width > 0 &&
                    rect.height > 0 &&
                    rect.top >= 0 &&
                    rect.left >= 0 &&
@@ -278,25 +330,23 @@
                    rect.right <= (window.innerWidth || document.documentElement.clientWidth);
         }
     }
-    
-    // 页面加载后初始化
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
-            setTimeout(() => new PreciseSensitiveContentExpander(), 1000);
+            setTimeout(() => new GrokAwareSensitiveContentExpander(), 1000);
         });
     } else {
-        setTimeout(() => new PreciseSensitiveContentExpander(), 1000);
+        setTimeout(() => new GrokAwareSensitiveContentExpander(), 1000);
     }
-    
-    // 处理单页应用导航
+
     let currentPath = window.location.pathname;
     const navObserver = new MutationObserver(() => {
         if (window.location.pathname !== currentPath) {
             currentPath = window.location.pathname;
-            setTimeout(() => new PreciseSensitiveContentExpander(), 1500);
+            setTimeout(() => new GrokAwareSensitiveContentExpander(), 1500);
         }
     });
-    
+
     navObserver.observe(document.body, {
         childList: true,
         subtree: true
