@@ -1,0 +1,259 @@
+// ==UserScript==
+// @name         X/Twitter 敏感内容自动展示
+// @namespace    http://tampermonkey.net/
+// @version      1.2
+// @description  自动展开X/Twitter上的敏感内容警告，无需手动点击
+// @author       YourName
+// @match        https://x.com/*
+// @match        https://twitter.com/*
+// @match        https://*.x.com/*
+// @match        https://*.twitter.com/*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
+(function() {
+    'use strict';
+    
+    // 配置选项
+    const config = {
+        autoExpand: true, // 自动展开敏感内容
+        removeBlur: true, // 移除模糊效果
+        skipWarning: true, // 跳过警告页面
+        checkInterval: 1000, // 检查间隔(毫秒)
+        maxRetries: 3 // 最大重试次数
+    };
+    
+    // 敏感内容选择器
+    const selectors = {
+        // 推文中的敏感内容警告
+        sensitiveTweet: '[data-testid="tweet"] [role="button"]:has-text("显示")',
+        warningCard: '[data-testid="card"] [role="button"]:has-text("查看")',
+        
+        // 媒体内容模糊
+        blurredMedia: '[data-testid="tweetPhoto"], [data-testid="tweetVideo"]',
+        mediaOverlay: '[data-testid="app-text-transition-container"]',
+        
+        // 警告页面
+        warningPage: '[data-testid="empty_state"]',
+        warningButton: '[role="button"][data-testid*="warning"]',
+        
+        // 新的X界面选择器
+        sensitiveContent: 'span:has-text("敏感内容")',
+        showButton: 'button:has-text("显示")',
+        viewButton: 'button:has-text("查看")'
+    };
+    
+    class SensitiveContentExpander {
+        constructor() {
+            this.processedElements = new Set();
+            this.retryCount = 0;
+            this.init();
+        }
+        
+        init() {
+            console.log('X敏感内容自动展示脚本已启动');
+            this.startObserver();
+            this.periodicCheck();
+            this.modifyPageStyles();
+        }
+        
+        // 修改页面样式以移除模糊效果
+        modifyPageStyles() {
+            const style = document.createElement('style');
+            style.textContent = `
+                /* 移除媒体内容的模糊效果 */
+                [data-testid="tweetPhoto"],
+                [data-testid="tweetVideo"],
+                .r-1p4rafz /* 模糊媒体选择器 */ {
+                    filter: none !important;
+                }
+                
+                /* 移除敏感内容警告遮罩 */
+                [data-testid="app-text-transition-container"],
+                .r-1mdbw0j /* 警告遮罩选择器 */ {
+                    display: none !important;
+                }
+                
+                /* 自动展开被折叠的内容 */
+                [aria-expanded="false"][role="button"] {
+                    opacity: 0.6;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        // 启动MutationObserver监听DOM变化
+        startObserver() {
+            const observer = new MutationObserver((mutations) => {
+                mutations.forEach((mutation) => {
+                    mutation.addedNodes.forEach((node) => {
+                        if (node.nodeType === 1) { // Element node
+                            this.processNewContent(node);
+                        }
+                    });
+                });
+            });
+            
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
+        }
+        
+        // 处理新内容
+        processNewContent(node) {
+            if (node.nodeType !== 1) return;
+            
+            // 检查是否是敏感内容警告页面
+            if (config.skipWarning && this.isWarningPage(node)) {
+                this.skipWarningPage();
+                return;
+            }
+            
+            // 查找并点击所有显示/查看按钮
+            this.findAndClickButtons(node);
+            
+            // 移除媒体模糊效果
+            if (config.removeBlur) {
+                this.removeBlurEffects(node);
+            }
+        }
+        
+        // 检查是否是警告页面
+        isWarningPage(node) {
+            const warningIndicators = [
+                '这个推文可能包含敏感内容',
+                '此推文可能包含敏感内容',
+                'sensitive content',
+                '可能包含敏感内容'
+            ];
+            
+            const text = node.textContent || '';
+            return warningIndicators.some(indicator => 
+                text.toLowerCase().includes(indicator.toLowerCase())
+            );
+        }
+        
+        // 跳过警告页面
+        skipWarningPage() {
+            // 尝试点击"显示"或"查看"按钮
+            const buttons = [
+                ...document.querySelectorAll('button'),
+                ...document.querySelectorAll('[role="button"]')
+            ];
+            
+            const targetButtons = buttons.filter(btn => {
+                const text = btn.textContent?.toLowerCase() || '';
+                return text.includes('显示') || text.includes('查看') || 
+                       text.includes('show') || text.includes('view');
+            });
+            
+            targetButtons.forEach(btn => {
+                if (!this.processedElements.has(btn)) {
+                    btn.click();
+                    this.processedElements.add(btn);
+                    console.log('已跳过敏感内容警告页面');
+                }
+            });
+        }
+        
+        // 查找并点击显示按钮
+        findAndClickButtons(container = document.body) {
+            const buttons = [
+                ...container.querySelectorAll('button'),
+                ...container.querySelectorAll('[role="button"]')
+            ];
+            
+            buttons.forEach(button => {
+                if (this.processedElements.has(button)) return;
+                
+                const text = button.textContent?.toLowerCase() || '';
+                const shouldClick = text.includes('显示') || 
+                                  text.includes('查看') ||
+                                  text.includes('show') || 
+                                  text.includes('view');
+                
+                if (shouldClick && this.isVisible(button)) {
+                    this.safeClick(button);
+                    this.processedElements.add(button);
+                    console.log('已自动展开敏感内容');
+                }
+            });
+        }
+        
+        // 移除模糊效果
+        removeBlurEffects(container = document.body) {
+            const elements = container.querySelectorAll('*');
+            elements.forEach(el => {
+                // 检查样式中的模糊效果
+                const style = window.getComputedStyle(el);
+                if (style.filter.includes('blur') || 
+                    style.webkitFilter.includes('blur')) {
+                    el.style.filter = 'none !important';
+                    el.style.webkitFilter = 'none !important';
+                }
+            });
+        }
+        
+        // 安全点击（带重试机制）
+        safeClick(element, retry = 0) {
+            try {
+                element.click();
+                // 模拟更自然的点击行为
+                setTimeout(() => {
+                    if (this.isVisible(element) && retry < config.maxRetries) {
+                        this.safeClick(element, retry + 1);
+                    }
+                }, 100);
+            } catch (error) {
+                console.warn('点击失败:', error);
+            }
+        }
+        
+        // 检查元素是否可见
+        isVisible(element) {
+            if (!element) return false;
+            const rect = element.getBoundingClientRect();
+            const style = window.getComputedStyle(element);
+            
+            return style.display !== 'none' && 
+                   style.visibility !== 'hidden' && 
+                   rect.width > 0 && 
+                   rect.height > 0 &&
+                   style.opacity !== '0';
+        }
+        
+        // 定期检查（作为备用方案）
+        periodicCheck() {
+            setInterval(() => {
+                if (this.retryCount < config.maxRetries) {
+                    this.findAndClickButtons();
+                    this.retryCount++;
+                }
+            }, config.checkInterval);
+        }
+    }
+    
+    // 等待页面加载完成后启动
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            new SensitiveContentExpander();
+        });
+    } else {
+        new SensitiveContentExpander();
+    }
+    
+    // 监听URL变化（单页应用）
+    let lastUrl = location.href;
+    new MutationObserver(() => {
+        const url = location.href;
+        if (url !== lastUrl) {
+            lastUrl = url;
+            setTimeout(() => {
+                new SensitiveContentExpander();
+            }, 1000);
+        }
+    }).observe(document, { subtree: true, childList: true });
+    
+})();
